@@ -75,7 +75,18 @@ app.post('/api/login', async (req, res) => {
 
 app.post('/api/logout', auth, (req, res) => { sessions.delete(req.session.id); req.user.activeSession = null; res.json({ ok: true }); });
 app.get('/api/me', auth, (req, res) => res.json({ username: req.user.username, role: req.user.role, courses: req.user.courses }));
-app.get('/api/courses', auth, (req, res) => res.json(req.user.courses.map(id => courses.get(id)).filter(Boolean).map(c => ({ id: c.id, title: c.title, description: c.description, lessons: c.lessons.map(l => ({ id: l.id, title: l.title, description: l.description })) })));
+app.get('/api/courses', auth, (req, res) => {
+  const result = req.user.courses
+    .map(id => courses.get(id))
+    .filter(Boolean)
+    .map(c => ({
+      id: c.id,
+      title: c.title,
+      description: c.description,
+      lessons: c.lessons.map(l => ({ id: l.id, title: l.title, description: l.description }))
+    }));
+  res.json(result);
+});
 app.get('/api/courses/:courseId', auth, (req, res) => {
   if (!req.user.courses.includes(req.params.courseId)) return res.status(403).json({ error: 'این دوره برای حساب شما فعال نیست' });
   const c = courses.get(req.params.courseId); if (!c) return res.status(404).json({ error: 'دوره پیدا نشد' });
