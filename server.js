@@ -35,7 +35,7 @@ const sessions = new Map();
 function seed() {
   if (users.size) return;
   const passwordHash = bcrypt.hashSync('demo12345', 12);
-  users.set('demo', { id: uuid(), username: 'demo', passwordHash, role: 'student', deviceId: null, activeSession: null, courses: ['course-1'] });
+  users.set('demo', { id: uuid(), username: 'demo', passwordHash, role: 'student', deviceId: null, firstIp: null, activeSession: null, courses: ['course-1'] });
   courses.set('course-1', {
     id: 'course-1', title: 'نمونه دوره', description: 'دوره نمونه برای تست پنل و سیستم محافظت محتواست.',
     lessons: [{ id: 'lesson-1', title: 'درس اول', description: 'ویدیوی نمونه را از پنل مدیریت اضافه کنید.', file: null }]
@@ -52,7 +52,10 @@ function auth(req, res, next) {
     const payload = jwt.verify(token, JWT_SECRET);
     const user = [...users.values()].find(u => u.id === payload.sub);
     const session = sessions.get(payload.sid);
-    if (!user || !session || session.userId !== user.id || session.deviceId !== user.deviceId) return res.status(401).json({ error: 'جلسه معتبر نیست' });
+    const currentIp = req.ip;
+    if (!user || !session || session.userId !== user.id || session.deviceId !== user.deviceId || session.ip !== currentIp || user.firstIp !== currentIp) {
+      return res.status(401).json({ error: 'دستگاه یا IP مجاز نیست' });
+    }
     req.user = user; req.session = session; next();
   } catch { return res.status(401).json({ error: 'نشست منقضی شده است' }); }
 }
@@ -63,12 +66,19 @@ app.post('/api/login', async (req, res) => {
   const password = String(req.body.password || '');
   const user = users.get(username);
   if (!user || !(await bcrypt.compare(password, user.passwordHash))) return res.status(401).json({ error: 'نام کاربری یا رمز عبور اشتباه است' });
-  const presentedDevice = req.headers['x-device-id'];
+
+  const presentedDevice = String(req.headers['x-device-id'] || '');
+  const currentIp = req.ip;
+
   if (user.deviceId && presentedDevice !== user.deviceId) return res.status(403).json({ error: 'این حساب به دستگاه دیگری متصل است' });
+  if (user.firstIp && currentIp !== user.firstIp) return res.status(403).json({ error: 'این حساب به IP دیگری متصل است' });
+
   if (!user.deviceId) user.deviceId = presentedDevice || uuid();
+  if (!user.firstIp) user.firstIp = currentIp;
+
   const sessionId = uuid();
   if (user.activeSession) sessions.delete(user.activeSession);
-  const session = { id: sessionId, userId: user.id, deviceId: user.deviceId, createdAt: Date.now() };
+  const session = { id: sessionId, userId: user.id, deviceId: user.deviceId, ip: user.firstIp, createdAt: Date.now() };
   sessions.set(sessionId, session); user.activeSession = sessionId;
   res.json({ token: tokenFor(user, sessionId), deviceId: user.deviceId, user: { username: user.username, role: user.role } });
 });
@@ -93,7 +103,6 @@ app.get('/api/courses/:courseId', auth, (req, res) => {
   res.json({ ...c, lessons: c.lessons.map(l => ({ id: l.id, title: l.title, description: l.description })) });
 });
 
-// Media is never exposed as a public static directory. Authentication is required.
 app.get('/api/media/:courseId/:lessonId', auth, (req, res) => {
   if (!req.user.courses.includes(req.params.courseId)) return res.sendStatus(403);
   const course = courses.get(req.params.courseId); const lesson = course?.lessons.find(x => x.id === req.params.lessonId);
@@ -119,7 +128,7 @@ app.post('/api/admin/user', admin, async (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase(); const password = String(req.body.password || '');
   if (!username || password.length < 8) return res.status(400).json({ error: 'نام کاربری و رمز حداقل ۸ کاراکتر لازم است' });
   if (users.has(username)) return res.status(409).json({ error: 'کاربر وجود دارد' });
-  const user = { id: uuid(), username, passwordHash: await bcrypt.hash(password, 12), role: 'student', deviceId: null, activeSession: null, courses: [] };
+  const user = { id: uuid(), username, passwordHash: await bcrypt.hash(password, 12), role: 'student', deviceId: null, firstIp: null, activeSession: null, courses: [] };
   users.set(username, user); res.json({ username, message: 'حساب ساخته شد' });
 });
 app.post('/api/admin/user/:username/grant/:courseId', admin, (req, res) => {
@@ -128,7 +137,7 @@ app.post('/api/admin/user/:username/grant/:courseId', admin, (req, res) => {
 });
 app.post('/api/admin/user/:username/reset-device', admin, (req, res) => {
   const user = users.get(req.params.username); if (!user) return res.status(404).json({ error: 'کاربر پیدا نشد' });
-  if (user.activeSession) sessions.delete(user.activeSession); user.activeSession = null; user.deviceId = null; res.json({ ok: true });
+  if (user.activeSession) sessions.delete(user.activeSession); user.activeSession = null; user.deviceId = null; user.firstIp = null; res.json({ ok: true });
 });
 app.get('/api/admin/stats', admin, (_, res) => res.json({ users: users.size, courses: courses.size, sessions: sessions.size }));
 
