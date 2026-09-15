@@ -5,31 +5,24 @@ const https = require('https');
 const botFile = path.join(__dirname, 'bot.js');
 let bot = fs.readFileSync(botFile, 'utf8');
 
-// Preserve configured admin access.
+// Configured admin (ADMIN_USERNAME / ADMIN_CHAT_ID) must have full admin access.
+const adminPatch = "const isConfiguredAdmin = u => Boolean((u?.username && String(u.username).toLowerCase() === ADMIN_USERNAME) || (process.env.ADMIN_CHAT_ID && String(u?.id) === String(process.env.ADMIN_CHAT_ID)));\n  const canAdmin = u => isOwner(u) || isManager(u) || isConfiguredAdmin(u);\n  const hasPerm = (u,p) => isOwner(u) || isConfiguredAdmin(u) || Boolean(managers.get(String(u?.id))?.permissions?.[p]);";
+bot = bot.replace(/const isConfiguredAdmin = u =>[\s\S]*?const canAdmin = u =>[^;]+;\s*const hasPerm = u =>[^;]+;/, adminPatch);
+bot = bot.replace(/const canAdmin = u => isOwner\(u\) \|\| isManager\(u\);\s*/, adminPatch + '\n  ');
 if (!bot.includes('const isConfiguredAdmin = u =>')) {
-  bot = bot.replace(
-    'const canAdmin = u => isOwner(u) || isManager(u);',
-    "const isConfiguredAdmin = u => Boolean(u?.username && String(u.username).toLowerCase() === ADMIN_USERNAME);\n  const canAdmin = u => isOwner(u) || isManager(u) || isConfiguredAdmin(u);"
-  );
+  bot = bot.replace('const canAdmin = u => isOwner(u) || isManager(u);', adminPatch);
 }
 
 // The Telegram receiver must NEVER stop when botEnabled=false.
-// The first incoming message/button wakes the logical bot and then continues normally.
 if (!bot.includes("auto-enabled by incoming message")) {
-  bot = bot.replace(
-    /async function handleMessage\(m\)\s*\{/,
-    "async function handleMessage(m){ if(!botEnabled){ botEnabled=true; saveState(); console.log('[telegram] auto-enabled by incoming message'); }"
-  );
+  bot = bot.replace(/async function handleMessage\(m\)\s*\{/, "async function handleMessage(m){ if(!botEnabled){ botEnabled=true; saveState(); console.log('[telegram] auto-enabled by incoming message'); }");
 }
 if (!bot.includes("auto-enabled by incoming button")) {
-  bot = bot.replace(
-    /async function handleCallback\(q\)\s*\{/,
-    "async function handleCallback(q){ if(!botEnabled){ botEnabled=true; saveState(); console.log('[telegram] auto-enabled by incoming button'); }"
-  );
+  bot = bot.replace(/async function handleCallback\(q\)\s*\{/, "async function handleCallback(q){ if(!botEnabled){ botEnabled=true; saveState(); console.log('[telegram] auto-enabled by incoming button'); }");
 }
 
-// Remove only the old webhook bridge. Keep the original polling receiver.
-bot = bot.replace(/global\.__behnazTelegramUpdate\s*=\s*async u => \{[\s\S]*?\};\s*/g, '');
+// Keep polling mode; remove any stale webhook bridge.
+bot = bot.replace(/global\.\__behnazTelegramUpdate\s*=\s*async u => \{[\s\S]*?\};\s*/g, '');
 fs.writeFileSync(botFile, bot);
 
 // Telegram does not allow getUpdates polling while a webhook is configured.
