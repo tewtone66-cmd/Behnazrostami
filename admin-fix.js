@@ -4,14 +4,13 @@ const path = require('path');
 const botFile = path.join(__dirname, 'bot.js');
 let bot = fs.readFileSync(botFile, 'utf8');
 
-// Owner access is authoritative: ADMIN_CHAT_ID seeds ownerId, and persisted ownerId survives restarts.
-// Do not grant owner access from a username.
+// Keep admin access authoritative and remove the old username-based fallback.
 bot = bot.replace(
   /const isConfiguredAdmin = u =>[\s\S]*?const canAdmin = u => isOwner\(u\) \|\| isManager\(u\) \|\| isConfiguredAdmin\(u\);\n?/,
   'const canAdmin = u => isOwner(u) || isManager(u);\n'
 );
 
-// Wake the logical bot before processing the same update.
+// Incoming updates must wake the logical bot and continue with the same update.
 bot = bot.replace(
   /async function handleMessage\(m(?:,\s*queued=false)?\)\s*\{/,
   "async function handleMessage(m,queued=false){if(!botEnabled){botEnabled=true;saveState();console.log('[telegram] auto-enabled by incoming message');}"
@@ -26,16 +25,26 @@ if (!bot.includes('function __recordUserHistory')) {
   bot = bot.replace('function messageSummary(m){', helper + 'function messageSummary(m){');
 }
 
-// Record all incoming user messages before normal routing.
+// Record incoming user messages.
 bot = bot.replace(
   /async function handleMessage\(m(?:,\s*queued=false)?\)\s*\{/,
   "async function handleMessage(m,queued=false){if(!botEnabled){botEnabled=true;saveState();console.log('[telegram] auto-enabled by incoming message');}getOrCreateUser(m);__recordUserHistory(m);"
 );
 
-// Waiting text is handled by the same incoming message. Ownership result edits the original panel message.
+// Store the originating panel message for flows that must edit the same message.
 bot = bot.replace(
-  /async function handleMessage\(m(?:,\s*queued=false)?\)\{[^\n]*/,
-  match => match + `\nconst __aid=String(m.from?.id||''),__txt=String(m.text||'').trim();\nif(canAdmin(m.from)&&waitingForManager.has(__aid)){const st=waitingForManager.get(__aid)||{};const id=__txt.replace(/\\D/g,'');if(!/^\\d{5,20}$/.test(id)){if(st.messageId){try{await edit(m.chat.id,st.messageId,'❌ فقط آیدی عددی معتبر بفرست.\\n\\n🆔 آیدی مدیر جدید را دوباره بفرست.',adminManagers());}catch{}}else return send(m.chat.id,'❌ فقط آیدی عددی معتبر بفرست.',{reply_markup:adminManagers()});return;}managers.set(id,{userId:id,permissions:defaultPerms(),addedAt:new Date().toISOString()});waitingForManager.delete(__aid);saveState();if(st.messageId){try{return await edit(m.chat.id,st.messageId,'✅ مدیر با موفقیت اضافه شد.\\n🆔 <code>'+safe(id)+'</code>',managerKeyboard(id));}catch{}}return send(m.chat.id,'✅ مدیر با موفقیت اضافه شد.\\n🆔 <code>'+safe(id)+'</code>',{reply_markup:managerKeyboard(id)});}\nif(isOwner(m.from)&&waitingForOwnership.has(__aid)){const st=waitingForOwnership.get(__aid)||{};const id=__txt.replace(/\\D/g,'');if(!/^\\d{5,20}$/.test(id)){if(st.messageId){try{await edit(m.chat.id,st.messageId,'❌ فقط آیدی عددی معتبر بفرست.\\n\\n👑 آیدی مالک جدید را دوباره بفرست.',adminOwnership());}catch{}}else return send(m.chat.id,'❌ فقط آیدی عددی معتبر بفرست.',{reply_markup:adminOwnership()});return;}ownerId=id;waitingForOwnership.delete(__aid);saveState();if(st.messageId){try{return await edit(m.chat.id,st.messageId,'✅ <b>انتقال مالکیت انجام شد.</b>\\n\\n👑 مالک جدید: <code>'+safe(id)+'</code>',adminOwnership());}catch{}}return send(m.chat.id,'✅ <b>انتقال مالکیت انجام شد.</b>\\n🆔 <code>'+safe(id)+'</code>',{reply_markup:adminOwnership()});}`
+  /if\(action==='manager_add'&&canAdmin\(from\)\)\{/,
+  "if(action==='manager_add'&&canAdmin(from)){waitingForManager.set(String(from.id),{messageId:q.message.message_id});return edit(chatId,q.message.message_id,'🛡 <b>افزودن مدیر</b>\\n\\n🆔 آیدی عددی مدیر جدید را بفرست:',adminManagers());}if(action==='transfer_owner'&&isOwner(from)){waitingForOwnership.set(String(from.id),{messageId:q.message.message_id});return edit(chatId,q.message.message_id,'👑 <b>انتقال مالکیت</b>\\n\\n🆔 آیدی عددی مالک جدید را بفرست:',adminOwnership());}if(action==='admin_user_history'&&canAdmin(from))return __showHistoryUsers(chatId);if(action.startsWith('user_history:')&&canAdmin(from)){const z=action.split(':');return __showUserHistory(chatId,z[1],z[2]||0);}if(action.startsWith('user_message:')&&canAdmin(from)){const z=action.split(':');return __showUserMessage(chatId,z[1],z[2]||0);}if(action==='manager_add'&&canAdmin(from)){"
+);
+
+// Remove the obsolete duplicate branch body only if the previous code shape exists.
+bot = bot.replace(
+  "waitingForManager.set(chatId,true);return send(chatId,'🆔 Telegram ID مدیر جدید را ارسال کنید.',{reply_markup:adminManagers()});",
+  "waitingForManager.set(chatId,{messageId:q.message.message_id});return edit(chatId,q.message.message_id,'🛡 <b>افزودن مدیر</b>\\n\\n🆔 آیدی عددی مدیر جدید را بفرست:',adminManagers());"
+);
+bot = bot.replace(
+  "waitingForOwnership.set(chatId,true);return send(chatId,'🆔 Telegram ID مالک جدید را ارسال کنید.\\n\\nپس از انتقال، مالک جدید دسترسی کامل خواهد داشت.',{reply_markup:adminOwnership()});",
+  "waitingForOwnership.set(chatId,{messageId:q.message.message_id});return edit(chatId,q.message.message_id,'👑 <b>انتقال مالکیت</b>\\n\\n🆔 آیدی عددی مالک جدید را بفرست:',adminOwnership());"
 );
 
 bot = bot.replace(
@@ -47,12 +56,12 @@ bot = bot.replace(
   "const userKeyboard=id=>({inline_keyboard:[[{text:'👤 اطلاعات',callback_data:`user_info:${id}`}],[{text:'📜 پیام‌های کاربر',callback_data:`user_history:${id}:0`}],[{text:'🟢 اعطای دسترسی',callback_data:`grant:${id}`},{text:'🔴 لغو',callback_data:`revoke:${id}`}],[{text:'📥 رسیدها',callback_data:`user_receipts:${id}`}],[{text:'🔗 ارسال دسترسی',callback_data:`user_link:${id}`}],[{text:'↩️ کاربران',callback_data:'admin_users'}]]});"
 );
 
-// Callback state is kept against the exact panel message so the next text edits that message instead of sending a new one.
-bot = bot.replace(
-  /const chatId=String\(q\.message\.chat\.id\),action=String\(q\.data\|\|''\),from=q\.from;try\{/,
-  "const chatId=String(q.message.chat.id),action=String(q.data||''),from=q.from;try{if(!botEnabled){botEnabled=true;saveState();console.log('[telegram] auto-enabled by incoming button');}if(action==='manager_add'&&canAdmin(from)){waitingForManager.set(String(from.id),{messageId:q.message.message_id});return edit(chatId,q.message.message_id,'🛡 <b>افزودن مدیر</b>\\n\\n🆔 آیدی عددی مدیر جدید را بفرست:',adminManagers());}if(action==='transfer_owner'&&isOwner(from)){waitingForOwnership.set(String(from.id),{messageId:q.message.message_id});return edit(chatId,q.message.message_id,'👑 <b>انتقال مالکیت</b>\\n\\n🆔 آیدی عددی مالک جدید را بفرست:',adminOwnership());}if(action==='admin_user_history'&&canAdmin(from))return __showHistoryUsers(chatId);if(action.startsWith('user_history:')&&canAdmin(from)){const z=action.split(':');return __showUserHistory(chatId,z[1],z[2]||0);}if(action.startsWith('user_message:')&&canAdmin(from)){const z=action.split(':');return __showUserMessage(chatId,z[1],z[2]||0);}"
-);
+// Replace polling startup with Telegram webhook startup. Telegram's HTTP request to Render is the wake signal.
+const oldStartup = "async function startup(){loadState();try{await telegram('deleteWebhook',{drop_pending_updates:false});}catch(e){console.error('[telegram] deleteWebhook:',e.message);}try{const me=await telegram('getMe');console.log(`[telegram] bot connected: @${me.username||me.first_name}`);}catch(e){console.error('[telegram] getMe failed:',e.message);}await sleep(2000);if(botEnabled)await processOffline();poll();}";
+const newStartup = "async function startup(){loadState();const webhookBase=process.env.TELEGRAM_WEBHOOK_URL||process.env.RENDER_EXTERNAL_URL||'';const webhookUrl=webhookBase?`${webhookBase.replace(/\\/$/,'')}/telegram/webhook`:'';try{const me=await telegram('getMe');console.log(`[telegram] bot connected: @${me.username||me.first_name}`);if(webhookUrl){await telegram('setWebhook',{url:webhookUrl,allowed_updates:['message','callback_query'],drop_pending_updates:false});console.log('[telegram] webhook enabled');}else console.warn('[telegram] no webhook URL configured; set TELEGRAM_WEBHOOK_URL or RENDER_EXTERNAL_URL');}catch(e){console.error('[telegram] webhook startup:',e.message);}if(botEnabled)await processOffline();let coldStart=true;global.__behnazTelegramUpdate=async u=>{if(!u)return;const m=u.message,q=u.callback_query;const chatId=String(m?.chat?.id||q?.message?.chat?.id||'');if(coldStart&&chatId){coldStart=false;try{await send(chatId,'⚠️ یک اختلالی پیش آمد. لطفاً چند لحظه صبر کنید...');}catch(e){console.error('[telegram] wake notice:',e.message);}}try{if(q)await handleCallback(q);else if(m)await handleMessage(m);}catch(e){console.error('[telegram] webhook update:',e.message);}};}";
+if (bot.includes(oldStartup)) bot = bot.replace(oldStartup, newStartup);
 
+// The webhook receiver must never be removed by this bootstrap.
 fs.writeFileSync(botFile, bot);
-console.log('[telegram] admin fixes applied');
+console.log('[telegram] webhook bootstrap applied');
 require('./server.js');
