@@ -12,45 +12,50 @@ if (!bot.includes('const isConfiguredAdmin = u =>')) {
   );
 }
 
-// A message or inline-button press must wake the bot immediately.
-if (!bot.includes('[telegram] auto-enabled by incoming update')) {
+// IMPORTANT: bot.js is heavily minified. Do not depend on newlines in regexes.
+// Every incoming Telegram update must wake the bot before any botEnabled guard.
+if (!bot.includes("auto-enabled by incoming message")) {
   bot = bot.replace(
-    /async function handleMessage\(m\)\{/,
+    /async function handleMessage\(m\)\s*\{/,
     "async function handleMessage(m){ if(!botEnabled){ botEnabled=true; saveState(); console.log('[telegram] auto-enabled by incoming message'); }"
   );
+}
+if (!bot.includes("auto-enabled by incoming button")) {
   bot = bot.replace(
-    /async function handleCallback\(q\)\{/,
+    /async function handleCallback\(q\)\s*\{/,
     "async function handleCallback(q){ if(!botEnabled){ botEnabled=true; saveState(); console.log('[telegram] auto-enabled by incoming button'); }"
   );
 }
 
-// Stop duplicate polling loops by making the existing poll function a no-op.
-bot = bot.replace(/async function poll\(\)\{[\s\S]*?\n  \}\n  async function startup\(\)/, "async function poll(){ return; }\n  async function startup()" );
+// Disable ALL getUpdates polling. Telegram must deliver updates through the webhook.
+bot = bot.replace(
+  /async function poll\(\)\{[\s\S]*?\}\s*async function startup\(\)/,
+  "async function poll(){ return; } async function startup()"
+);
 
-// Register the webhook before bot startup. This guarantees Telegram delivers
-// updates even if the old polling code exists elsewhere in the bot source.
+// Expose handlers to the HTTP webhook exactly once.
+if (!bot.includes('global.__behnazTelegramUpdate')) {
+  bot = bot.replace(
+    /async function startup\(\)\s*\{/,
+    "global.__behnazTelegramUpdate = async u => { try { if (u?.callback_query) await handleCallback(u.callback_query); else if (u?.message) await handleMessage(u.message); } catch(e) { console.error('[telegram] webhook update error:', e.message); } }; async function startup(){"
+  );
+}
+
+// Replace the original startup body regardless of minification/newline layout.
+bot = bot.replace(
+  /async function startup\(\)\{[\s\S]*?\}\s*process\.once\(['\"]SIGTERM['\"]/, 
+  "async function startup(){ loadState(); try { const base=String(process.env.RENDER_EXTERNAL_URL || 'https://behnazrostami.onrender.com').replace(/\\/$/,''); await telegram('deleteWebhook',{drop_pending_updates:false}).catch(()=>{}); await telegram('setWebhook',{url:base+'/telegram/webhook',allowed_updates:['message','callback_query'],drop_pending_updates:false}); console.log('[telegram] webhook enabled: '+base+'/telegram/webhook'); const me=await telegram('getMe'); console.log('[telegram] bot connected: @'+(me.username||me.first_name)); } catch(e) { console.error('[telegram] webhook startup:',e.message); } if(botEnabled) await processOffline(); } process.once('SIGTERM'"
+);
+
 const serverFile = path.join(__dirname, 'server.js');
 let server = fs.readFileSync(serverFile, 'utf8');
 if (!server.includes("app.post('/telegram/webhook'")) {
   const route = `\n\napp.post('/telegram/webhook', express.json({ limit: '2mb' }), async (req, res) => {\n  try {\n    if (typeof global.__behnazTelegramUpdate === 'function') await global.__behnazTelegramUpdate(req.body);\n    res.sendStatus(200);\n  } catch (e) {\n    console.error('[telegram] webhook handler:', e.message);\n    res.sendStatus(500);\n  }\n});\n`;
-  server = server.replace("const PORT = process.env.PORT || 10000;", "const PORT = process.env.PORT || 10000;" + route);
+  const marker = "const PORT = process.env.PORT || 10000;";
+  if (server.includes(marker)) server = server.replace(marker, marker + route);
+  else server += route;
   fs.writeFileSync(serverFile, server);
 }
-
-// Expose the existing handlers to the webhook without changing bot.js permanently.
-if (!bot.includes('global.__behnazTelegramUpdate')) {
-  bot = bot.replace(
-    /async function startup\(\)\{/,
-    "global.__behnazTelegramUpdate = async u => { offset = Number(u?.update_id || 0) + 1; try { if (u?.callback_query) await handleCallback(u.callback_query); else if (u?.message) await handleMessage(u.message); } catch(e) { console.error('[telegram] webhook update error:', e.message); } };\n  async function startup(){"
-  );
-}
-
-// The bot file itself still performs startup. Make its startup non-destructive:
-// webhook is configured first and pending updates are preserved.
-bot = bot.replace(
-  /async function startup\(\)\{[\s\S]*?\n  \}\n  process\.once\('SIGTERM'/,
-  `async function startup(){\n    loadState();\n    try {\n      const base = String(process.env.RENDER_EXTERNAL_URL || 'https://behnazrostami.onrender.com').replace(/\\/$/, '');\n      await telegram('setWebhook',{url:base+'/telegram/webhook',allowed_updates:['message','callback_query'],drop_pending_updates:false});\n      console.log('[telegram] webhook enabled: '+base+'/telegram/webhook');\n      const me=await telegram('getMe');\n      console.log(\`[telegram] bot connected: @\${me.username||me.first_name}\`);\n    } catch(e) { console.error('[telegram] webhook startup:',e.message); }\n    if(botEnabled) await processOffline();\n  }\n  process.once('SIGTERM'`
-);
 
 fs.writeFileSync(botFile, bot);
 require('./server.js');
