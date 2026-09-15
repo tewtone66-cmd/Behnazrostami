@@ -20,7 +20,7 @@ bot = bot.replace(
 if (!bot.includes('global.__behnazTelegramUpdate')) {
   bot = bot.replace(
     "\n  async function poll(){while(!stopped){",
-    "\n  global.__behnazTelegramUpdate = async u => {\n    offset = Number(u?.update_id || 0) + 1;\n    saveState();\n    try {\n      if (u?.callback_query) await handleCallback(u.callback_query);\n      else if (u?.message) await handleMessage(u.message);\n    } catch (e) {\n      console.error('[telegram] webhook update error:', e.message);\n    }\n  };\n\n  async function poll(){return;}\n  async function legacyPollDisabled(){while(!stopped){"
+    "\n  global.__behnazTelegramUpdate = async u => {\n    offset = Number(u?.update_id || 0) + 1;\n    if (!botEnabled) {\n      botEnabled = true;\n      saveState();\n      console.log('[telegram] auto-enabled by incoming update');\n    }\n    try {\n      if (u?.callback_query) await handleCallback(u.callback_query);\n      else if (u?.message) await handleMessage(u.message);\n    } catch (e) {\n      console.error('[telegram] webhook update error:', e.message);\n    }\n  };\n\n  async function poll(){return;}\n  async function legacyPollDisabled(){while(!stopped){"
   );
   bot = bot.replace(/  async function legacyPollDisabled\(\)\{while\(!stopped\)\{[\s\S]*?\n  \}\n  async function startup\(\)/, "  async function startup()" );
 }
