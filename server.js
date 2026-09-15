@@ -27,7 +27,6 @@ const upload = multer({
   fileFilter: (_, file, cb) => cb(null, /video\/(mp4|webm|quicktime)/.test(file.mimetype))
 });
 
-// Prototype store. Production persistence should be backed by Postgres before real sales.
 const users = new Map();
 const courses = new Map();
 const sessions = new Map();
@@ -66,16 +65,12 @@ app.post('/api/login', async (req, res) => {
   const password = String(req.body.password || '');
   const user = users.get(username);
   if (!user || !(await bcrypt.compare(password, user.passwordHash))) return res.status(401).json({ error: 'نام کاربری یا رمز عبور اشتباه است' });
-
   const presentedDevice = String(req.headers['x-device-id'] || '');
   const currentIp = req.ip;
-
   if (user.deviceId && presentedDevice !== user.deviceId) return res.status(403).json({ error: 'این حساب به دستگاه دیگری متصل است' });
   if (user.firstIp && currentIp !== user.firstIp) return res.status(403).json({ error: 'این حساب به IP دیگری متصل است' });
-
   if (!user.deviceId) user.deviceId = presentedDevice || uuid();
   if (!user.firstIp) user.firstIp = currentIp;
-
   const sessionId = uuid();
   if (user.activeSession) sessions.delete(user.activeSession);
   const session = { id: sessionId, userId: user.id, deviceId: user.deviceId, ip: user.firstIp, createdAt: Date.now() };
@@ -86,15 +81,7 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/logout', auth, (req, res) => { sessions.delete(req.session.id); req.user.activeSession = null; res.json({ ok: true }); });
 app.get('/api/me', auth, (req, res) => res.json({ username: req.user.username, role: req.user.role, courses: req.user.courses }));
 app.get('/api/courses', auth, (req, res) => {
-  const result = req.user.courses
-    .map(id => courses.get(id))
-    .filter(Boolean)
-    .map(c => ({
-      id: c.id,
-      title: c.title,
-      description: c.description,
-      lessons: c.lessons.map(l => ({ id: l.id, title: l.title, description: l.description }))
-    }));
+  const result = req.user.courses.map(id => courses.get(id)).filter(Boolean).map(c => ({ id: c.id, title: c.title, description: c.description, lessons: c.lessons.map(l => ({ id: l.id, title: l.title, description: l.description })) }));
   res.json(result);
 });
 app.get('/api/courses/:courseId', auth, (req, res) => {
@@ -102,7 +89,6 @@ app.get('/api/courses/:courseId', auth, (req, res) => {
   const c = courses.get(req.params.courseId); if (!c) return res.status(404).json({ error: 'دوره پیدا نشد' });
   res.json({ ...c, lessons: c.lessons.map(l => ({ id: l.id, title: l.title, description: l.description })) });
 });
-
 app.get('/api/media/:courseId/:lessonId', auth, (req, res) => {
   if (!req.user.courses.includes(req.params.courseId)) return res.sendStatus(403);
   const course = courses.get(req.params.courseId); const lesson = course?.lessons.find(x => x.id === req.params.lessonId);
@@ -141,10 +127,20 @@ app.post('/api/admin/user/:username/reset-device', admin, (req, res) => {
 });
 app.get('/api/admin/stats', admin, (_, res) => res.json({ users: users.size, courses: courses.size, sessions: sessions.size }));
 
+// Telegram webhook endpoint. The bot module installs the handler on global before registering the webhook.
+app.post('/telegram/webhook', async (req, res) => {
+  try {
+    if (typeof global.__behnazTelegramUpdate === 'function') await global.__behnazTelegramUpdate(req.body);
+    res.sendStatus(200);
+  } catch (e) {
+    console.error('[telegram] webhook handler:', e.message);
+    res.sendStatus(500);
+  }
+});
+
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
 app.use((req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.listen(PORT, () => console.log(`Behnazrostami running on ${PORT}`));
 
-// Telegram sales bot. It stays disabled until BOT_TOKEN is added to the host environment.
 require('./bot');
