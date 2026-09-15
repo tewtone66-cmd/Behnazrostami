@@ -81,6 +81,12 @@ if (!token) {
     ...extra
   });
 
+  const copyMessage = (chatId, fromChatId, messageId) => telegram('copyMessage', {
+    chat_id: chatId,
+    from_chat_id: fromChatId,
+    message_id: messageId
+  });
+
   const name = u => [u?.first_name, u?.last_name].filter(Boolean).join(' ') || 'بدون نام';
   const username = u => u?.username ? `@${u.username}` : 'ندارد';
   const isAdmin = u => Boolean(
@@ -118,6 +124,35 @@ if (!token) {
 
   function receiptCaption(u, prefix = '📥 رسید پرداخت جدید') {
     return `<b>${prefix}</b>\n\n🎓 دوره: ${COURSE_TITLE}\n💰 مبلغ: ${COURSE_PRICE}\n👤 نام: ${name(u)}\n🔹 یوزرنیم: ${username(u)}\n🆔 Telegram ID: <code>${u.id}</code>\n🕐 زمان: ${new Date().toLocaleString('fa-IR')}`;
+  }
+
+  function receiptIdParts(id) {
+    const match = String(id || '').match(/^(-?\d+):(\d+)$/);
+    return match ? { chatId: match[1], messageId: Number(match[2]) } : null;
+  }
+
+  function getReceipt(id) {
+    const existing = pendingReceipts.get(String(id));
+    if (existing) return existing;
+    const parts = receiptIdParts(id);
+    if (!parts) return null;
+    const user = {
+      id: String(id),
+      chatId: String(parts.chatId),
+      userId: String(parts.chatId),
+      name: 'کاربر رسید',
+      username: '',
+      sentAt: new Date().toISOString(),
+      approved: false,
+      rejected: false,
+      access: false,
+      linkSent: '',
+      fileType: '',
+      fileId: ''
+    };
+    pendingReceipts.set(String(id), user);
+    users.set(String(user.userId), user);
+    return user;
   }
 
   async function forwardReceipt(m) {
@@ -170,9 +205,7 @@ if (!token) {
 
   async function sendPendingReceipts(chatId) {
     const pending = [...pendingReceipts.values()].filter(r => !r.approved && !r.rejected);
-    if (!pending.length) {
-      return send(chatId, '📭 هیچ رسید تاییدنشده‌ای وجود ندارد.', { reply_markup: adminKeyboard() });
-    }
+    if (!pending.length) return send(chatId, '📭 هیچ رسید تاییدنشده‌ای وجود ندارد.', { reply_markup: adminKeyboard() });
     await send(chatId, `<b>📥 رسیدهای جدید</b>\n\nتعداد: <b>${pending.length}</b>`);
     for (const r of pending) await sendReceiptToAdmin(chatId, r);
   }
@@ -184,11 +217,11 @@ if (!token) {
   }
 
   async function startLinkFlow(chatId, userId) {
-    const user = users.get(String(userId));
+    const user = users.get(String(userId)) || getReceipt(userId);
     if (!user) return send(chatId, '⚠️ کاربر پیدا نشد.', { reply_markup: adminKeyboard() });
     if (!user.approved) return send(chatId, '⚠️ اول رسید این کاربر را تایید کنید.');
     waitingForLink = String(user.userId);
-    return send(chatId, `🔗 لینک دسترسی برای <code>${user.userId}</code> آماده است.\n\nحالا لینک سایت را همینجا ارسال کنید.\nمثال: https://example.com/course`);
+    return send(chatId, `📨 هر پیامی که الان بفرستید، دقیقاً برای کاربر <code>${user.userId}</code> ارسال می‌شود.\n\nمتن، لینک، عکس، فایل، ویدیو یا هر پیام دیگری قابل ارسال است.`);
   }
 
   async function handleMessage(m) {
@@ -199,8 +232,7 @@ if (!token) {
       adminChatId = String(chatId);
 
       if (waitingForLink) {
-        if (!/^https?:\/\//i.test(text)) return send(chatId, '⚠️ لطفاً لینک را با http:// یا https:// ارسال کنید.');
-        const user = users.get(String(waitingForLink));
+        const user = users.get(String(waitingForLink)) || getReceipt(waitingForLink);
         if (!user) {
           waitingForLink = null;
           return send(chatId, '⚠️ کاربر پیدا نشد.', { reply_markup: adminKeyboard() });
@@ -210,14 +242,14 @@ if (!token) {
           return send(chatId, '⚠️ اول رسید این کاربر را تایید کنید.', { reply_markup: adminKeyboard() });
         }
         try {
-          await send(user.chatId, `<b>✅ پرداخت شما تایید شد.</b>\n\n🎓 ${COURSE_TITLE}\n\n🔗 لینک دسترسی شما:\n${text}`);
+          await copyMessage(user.chatId, chatId, m.message_id);
           user.access = true;
-          user.linkSent = text;
+          user.linkSent = text || '[پیام ارسال‌شده]';
           waitingForLink = null;
-          return send(chatId, '✅ لینک با موفقیت برای کاربر ارسال شد و دسترسی فعال شد.', { reply_markup: adminKeyboard() });
+          return send(chatId, '✅ پیام با موفقیت برای کاربر ارسال شد و دسترسی فعال شد.', { reply_markup: adminKeyboard() });
         } catch (err) {
-          console.error('[telegram] failed to send access link:', err.message);
-          return send(chatId, `❌ ارسال لینک انجام نشد.\n\nخطا: ${err.message}`);
+          console.error('[telegram] failed to copy owner message:', err.message);
+          return send(chatId, `❌ ارسال پیام انجام نشد.\n\nخطا: ${err.message}`);
         }
       }
 
@@ -270,36 +302,35 @@ if (!token) {
     }
     if (action === 'pending_receipts') return sendPendingReceipts(chatId);
     if (action === 'owner_id') return send(chatId, `🆔 آیدی چت مدیر:\n<code>${chatId}</code>`, { reply_markup: adminKeyboard() });
-    if (action === 'admin_status') return send(chatId, `<b>📊 وضعیت پنل</b>\n\n🧾 رسیدهای تاییدنشده: ${[...pendingReceipts.values()].filter(r => !r.approved && !r.rejected).length}\n👥 کاربران شناخته‌شده: ${users.size}\n📥 دریافت رسید: ${receiptsEnabled ? '🟢 روشن' : '🔴 خاموش'}\n🔗 انتظار لینک: ${waitingForLink ? '🟡 فعال' : '⚪ ندارد'}`, { reply_markup: adminKeyboard() });
+    if (action === 'admin_status') return send(chatId, `<b>📊 وضعیت پنل</b>\n\n🧾 رسیدهای تاییدنشده: ${[...pendingReceipts.values()].filter(r => !r.approved && !r.rejected).length}\n👥 کاربران شناخته‌شده: ${users.size}\n📥 دریافت رسید: ${receiptsEnabled ? '🟢 روشن' : '🔴 خاموش'}\n🔗 انتظار پیام: ${waitingForLink ? '🟡 فعال' : '⚪ ندارد'}`, { reply_markup: adminKeyboard() });
 
     if (action === 'user_lookup') {
       waitingForUserId.add(String(chatId));
       return send(chatId, '🆔 Telegram ID کاربر را بفرستید:');
     }
 
-    const [cmd, value] = action.split(':');
+    const [cmd, ...rest] = action.split(':');
+    const value = rest.join(':');
+
     if (cmd === 'info') {
-      const r = pendingReceipts.get(value);
+      const r = getReceipt(value);
       if (!r) return send(chatId, '⚠️ رسید پیدا نشد.', { reply_markup: adminKeyboard() });
-      return send(chatId, `<b>👤 اطلاعات کاربر</b>\n\nنام: ${r.name}\nیوزرنیم: ${r.username ? '@' + r.username : 'ندارد'}\nTelegram ID: <code>${r.userId}</code>\nChat ID: <code>${r.chatId}</code>\nرسید: ${r.approved ? '✅ تایید' : r.rejected ? '❌ رد' : '⏳ در انتظار'}\nدسترسی: ${r.access ? '🟢 دارد' : '🔴 ندارد'}` , { reply_markup: receiptKeyboard(value) });
+      return send(chatId, `<b>👤 اطلاعات کاربر</b>\n\nنام: ${r.name}\nیوزرنیم: ${r.username ? '@' + r.username : 'ندارد'}\nTelegram ID: <code>${r.userId}</code>\nChat ID: <code>${r.chatId}</code>\nرسید: ${r.approved ? '✅ تایید' : r.rejected ? '❌ رد' : '⏳ در انتظار'}\nدسترسی: ${r.access ? '🟢 دارد' : '🔴 ندارد'}`, { reply_markup: receiptKeyboard(value) });
     }
 
     if (cmd === 'approve') {
-      const r = pendingReceipts.get(value);
+      const r = getReceipt(value);
       if (!r) return send(chatId, '⚠️ رسید پیدا نشد.');
       r.approved = true;
       r.rejected = false;
       r.access = false;
-      try {
-        await send(r.chatId, `<b>✅ رسید شما تایید شد.</b>\n\n🎓 ${COURSE_TITLE}\n\nلطفاً برای دریافت لینک دسترسی، منتظر ارسال لینک از طرف مدیر باشید.`);
-      } catch (err) {
-        console.error('[telegram] approval notification failed:', err.message);
-      }
-      return send(chatId, '✅ رسید تایید شد. حالا روی «🔗 ارسال لینک» بزنید و لینک را بفرستید.', { reply_markup: receiptKeyboard(value) });
+      try { await send(r.chatId, `<b>✅ رسید شما تایید شد.</b>\n\n🎓 ${COURSE_TITLE}\n\nلطفاً برای دریافت لینک یا پیام دسترسی، منتظر ارسال مدیر باشید.`); }
+      catch (err) { console.error('[telegram] approval notification failed:', err.message); }
+      return send(chatId, '✅ رسید تایید شد. حالا روی «🔗 ارسال لینک» بزنید و هر پیامی که می‌خواهید برای کاربر بفرستید.', { reply_markup: receiptKeyboard(value) });
     }
 
     if (cmd === 'reject') {
-      const r = pendingReceipts.get(value);
+      const r = getReceipt(value);
       if (!r) return send(chatId, '⚠️ رسید پیدا نشد.');
       r.rejected = true;
       r.approved = false;
@@ -310,7 +341,7 @@ if (!token) {
     }
 
     if (cmd === 'link') {
-      const r = pendingReceipts.get(value);
+      const r = getReceipt(value);
       if (!r) return send(chatId, '⚠️ رسید پیدا نشد.');
       return startLinkFlow(chatId, r.userId);
     }
