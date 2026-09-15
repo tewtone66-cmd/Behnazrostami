@@ -52,9 +52,7 @@ function auth(req, res, next) {
     const user = [...users.values()].find(u => u.id === payload.sub);
     const session = sessions.get(payload.sid);
     const currentIp = req.ip;
-    if (!user || !session || session.userId !== user.id || session.deviceId !== user.deviceId || session.ip !== currentIp || user.firstIp !== currentIp) {
-      return res.status(401).json({ error: 'دستگاه یا IP مجاز نیست' });
-    }
+    if (!user || !session || session.userId !== user.id || session.deviceId !== user.deviceId || session.ip !== currentIp || user.firstIp !== currentIp) return res.status(401).json({ error: 'دستگاه یا IP مجاز نیست' });
     req.user = user; req.session = session; next();
   } catch { return res.status(401).json({ error: 'نشست منقضی شده است' }); }
 }
@@ -77,13 +75,9 @@ app.post('/api/login', async (req, res) => {
   sessions.set(sessionId, session); user.activeSession = sessionId;
   res.json({ token: tokenFor(user, sessionId), deviceId: user.deviceId, user: { username: user.username, role: user.role } });
 });
-
 app.post('/api/logout', auth, (req, res) => { sessions.delete(req.session.id); req.user.activeSession = null; res.json({ ok: true }); });
 app.get('/api/me', auth, (req, res) => res.json({ username: req.user.username, role: req.user.role, courses: req.user.courses }));
-app.get('/api/courses', auth, (req, res) => {
-  const result = req.user.courses.map(id => courses.get(id)).filter(Boolean).map(c => ({ id: c.id, title: c.title, description: c.description, lessons: c.lessons.map(l => ({ id: l.id, title: l.title, description: l.description })) }));
-  res.json(result);
-});
+app.get('/api/courses', auth, (req, res) => res.json(req.user.courses.map(id => courses.get(id)).filter(Boolean).map(c => ({ id: c.id, title: c.title, description: c.description, lessons: c.lessons.map(l => ({ id: l.id, title: l.title, description: l.description })) }))));
 app.get('/api/courses/:courseId', auth, (req, res) => {
   if (!req.user.courses.includes(req.params.courseId)) return res.status(403).json({ error: 'این دوره برای حساب شما فعال نیست' });
   const c = courses.get(req.params.courseId); if (!c) return res.status(404).json({ error: 'دوره پیدا نشد' });
@@ -95,39 +89,15 @@ app.get('/api/media/:courseId/:lessonId', auth, (req, res) => {
   if (!lesson?.file || !fs.existsSync(lesson.file)) return res.status(404).json({ error: 'ویدیو هنوز آپلود نشده است' });
   res.setHeader('Cache-Control', 'private, no-store'); res.setHeader('Content-Disposition', 'inline'); res.sendFile(path.resolve(lesson.file));
 });
-
-app.post('/api/admin/course', admin, (req, res) => {
-  const id = uuid(); const course = { id, title: String(req.body.title || 'دوره جدید'), description: String(req.body.description || ''), lessons: [] };
-  courses.set(id, course); res.json(course);
-});
-app.post('/api/admin/course/:courseId/lesson', admin, (req, res) => {
-  const c = courses.get(req.params.courseId); if (!c) return res.status(404).json({ error: 'دوره پیدا نشد' });
-  const lesson = { id: uuid(), title: String(req.body.title || 'درس جدید'), description: String(req.body.description || ''), file: null };
-  c.lessons.push(lesson); res.json(lesson);
-});
-app.post('/api/admin/course/:courseId/lesson/:lessonId/video', admin, upload.single('video'), (req, res) => {
-  const c = courses.get(req.params.courseId); const lesson = c?.lessons.find(x => x.id === req.params.lessonId);
-  if (!lesson || !req.file) return res.status(400).json({ error: 'فایل ویدیو لازم است' });
-  lesson.file = req.file.path; lesson.mime = req.file.mimetype; res.json({ ok: true, lessonId: lesson.id });
-});
-app.post('/api/admin/user', admin, async (req, res) => {
-  const username = String(req.body.username || '').trim().toLowerCase(); const password = String(req.body.password || '');
-  if (!username || password.length < 8) return res.status(400).json({ error: 'نام کاربری و رمز حداقل ۸ کاراکتر لازم است' });
-  if (users.has(username)) return res.status(409).json({ error: 'کاربر وجود دارد' });
-  const user = { id: uuid(), username, passwordHash: await bcrypt.hash(password, 12), role: 'student', deviceId: null, firstIp: null, activeSession: null, courses: [] };
-  users.set(username, user); res.json({ username, message: 'حساب ساخته شد' });
-});
-app.post('/api/admin/user/:username/grant/:courseId', admin, (req, res) => {
-  const user = users.get(req.params.username); if (!user || !courses.has(req.params.courseId)) return res.status(404).json({ error: 'یافت نشد' });
-  if (!user.courses.includes(req.params.courseId)) user.courses.push(req.params.courseId); res.json({ ok: true });
-});
-app.post('/api/admin/user/:username/reset-device', admin, (req, res) => {
-  const user = users.get(req.params.username); if (!user) return res.status(404).json({ error: 'کاربر پیدا نشد' });
-  if (user.activeSession) sessions.delete(user.activeSession); user.activeSession = null; user.deviceId = null; user.firstIp = null; res.json({ ok: true });
-});
+app.post('/api/admin/course', admin, (req, res) => { const id = uuid(); const course = { id, title: String(req.body.title || 'دوره جدید'), description: String(req.body.description || ''), lessons: [] }; courses.set(id, course); res.json(course); });
+app.post('/api/admin/course/:courseId/lesson', admin, (req, res) => { const c = courses.get(req.params.courseId); if (!c) return res.status(404).json({ error: 'دوره پیدا نشد' }); const lesson = { id: uuid(), title: String(req.body.title || 'درس جدید'), description: String(req.body.description || ''), file: null }; c.lessons.push(lesson); res.json(lesson); });
+app.post('/api/admin/course/:courseId/lesson/:lessonId/video', admin, upload.single('video'), (req, res) => { const c = courses.get(req.params.courseId); const lesson = c?.lessons.find(x => x.id === req.params.lessonId); if (!lesson || !req.file) return res.status(400).json({ error: 'فایل ویدیو لازم است' }); lesson.file = req.file.path; lesson.mime = req.file.mimetype; res.json({ ok: true, lessonId: lesson.id }); });
+app.post('/api/admin/user', admin, async (req, res) => { const username = String(req.body.username || '').trim().toLowerCase(); const password = String(req.body.password || ''); if (!username || password.length < 8) return res.status(400).json({ error: 'نام کاربری و رمز حداقل ۸ کاراکتر لازم است' }); if (users.has(username)) return res.status(409).json({ error: 'کاربر وجود دارد' }); const user = { id: uuid(), username, passwordHash: await bcrypt.hash(password, 12), role: 'student', deviceId: null, firstIp: null, activeSession: null, courses: [] }; users.set(username, user); res.json({ username, message: 'حساب ساخته شد' }); });
+app.post('/api/admin/user/:username/grant/:courseId', admin, (req, res) => { const user = users.get(req.params.username); if (!user || !courses.has(req.params.courseId)) return res.status(404).json({ error: 'یافت نشد' }); if (!user.courses.includes(req.params.courseId)) user.courses.push(req.params.courseId); res.json({ ok: true }); });
+app.post('/api/admin/user/:username/reset-device', admin, (req, res) => { const user = users.get(req.params.username); if (!user) return res.status(404).json({ error: 'کاربر پیدا نشد' }); if (user.activeSession) sessions.delete(user.activeSession); user.activeSession = null; user.deviceId = null; user.firstIp = null; res.json({ ok: true }); });
 app.get('/api/admin/stats', admin, (_, res) => res.json({ users: users.size, courses: courses.size, sessions: sessions.size }));
 
-// Telegram webhook endpoint. The bot module installs the handler on global before registering the webhook.
+// Telegram webhook must be registered before the SPA fallback.
 app.post('/telegram/webhook', async (req, res) => {
   try {
     if (typeof global.__behnazTelegramUpdate === 'function') await global.__behnazTelegramUpdate(req.body);
@@ -140,7 +110,5 @@ app.post('/telegram/webhook', async (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
 app.use((req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
 app.listen(PORT, () => console.log(`Behnazrostami running on ${PORT}`));
-
 require('./bot');
