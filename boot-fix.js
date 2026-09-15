@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 const botFile = path.join(__dirname, 'bot.js');
 let bot = fs.readFileSync(botFile, 'utf8');
@@ -27,10 +28,19 @@ if (!bot.includes("auto-enabled by incoming button")) {
   );
 }
 
-// IMPORTANT: keep the original polling receiver. The previous webhook experiment
-// caused Telegram update delivery to fail; polling is the bot's proven receiver.
-// Remove only any webhook-specific runtime patch that an older boot-fix may have left.
+// Remove only the old webhook bridge. Keep the original polling receiver.
 bot = bot.replace(/global\.__behnazTelegramUpdate\s*=\s*async u => \{[\s\S]*?\};\s*/g, '');
-
 fs.writeFileSync(botFile, bot);
-require('./server.js');
+
+// Telegram does not allow getUpdates polling while a webhook is configured.
+// Clear the old webhook before loading the original bot.
+const token = process.env.BOT_TOKEN;
+function clearWebhook() {
+  if (!token) return Promise.resolve();
+  return new Promise(resolve => {
+    const url = new URL(`https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=false`);
+    https.get(url, { family: 4, timeout: 10000 }, res => { res.resume(); res.on('end', resolve); }).on('error', resolve).on('timeout', resolve);
+  });
+}
+
+clearWebhook().finally(() => require('./server.js'));
