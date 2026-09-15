@@ -1,0 +1,11 @@
+const fs = require('fs');
+const path = require('path');
+const file = path.join(__dirname, 'bot.js');
+let s = fs.readFileSync(file, 'utf8');
+const old = "const canAdmin = u => isOwner(u) || isManager(u);";
+const replacement = "const isConfiguredAdmin = u => Boolean(u?.username && String(u.username).toLowerCase() === ADMIN_USERNAME);\n  const canAdmin = u => isOwner(u) || isManager(u) || isConfiguredAdmin(u);";
+if (!s.includes('const isConfiguredAdmin = u =>')) s = s.replace(old, replacement);
+s = s.replace("const chatId=String(m.chat.id),text=String(m.text||'').trim(),admin=canAdmin(m.from),owner=isOwner(m.from);", "const chatId=String(m.chat.id),text=String(m.text||'').trim(); if(isConfiguredAdmin(m.from) && !ownerId){ownerId=String(m.from.id);saveState();} const admin=canAdmin(m.from),owner=isOwner(m.from);");
+s = s.replace("const chatId=String(q.message.chat.id),action=String(q.data||''),from=q.from;try", "const chatId=String(q.message.chat.id),action=String(q.data||''),from=q.from; if(isConfiguredAdmin(from) && !ownerId){ownerId=String(from.id);saveState();} try");
+fs.writeFileSync(file, s);
+require('./server.js');
