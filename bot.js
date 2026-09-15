@@ -1,3 +1,5 @@
+const https = require('https');
+
 const COURSE_TITLE = process.env.COURSE_TITLE || 'مافیای استوری اینستاگرام';
 const COURSE_PRICE = process.env.COURSE_PRICE || 'قیمت تستی';
 const PAYMENT_URL = process.env.PAYMENT_URL || '';
@@ -13,15 +15,48 @@ if (!token) {
   let offset = 0;
   let stopped = false;
 
-  async function telegram(method, body = {}) {
-    const response = await fetch(`${API}/${method}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body)
+  // Use IPv4 explicitly. This avoids a common Render/Telegram connection issue
+  // where Node's fetch can fail before reaching api.telegram.org.
+  function telegram(method, body = {}) {
+    return new Promise((resolve, reject) => {
+      const url = new URL(`${API}/${method}`);
+      const payload = JSON.stringify(body);
+
+      const request = https.request({
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: 443,
+        path: `${url.pathname}${url.search}`,
+        method: 'POST',
+        family: 4,
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload)
+        },
+        timeout: 35000
+      }, response => {
+        let data = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { data += chunk; });
+        response.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (!parsed.ok) {
+              reject(new Error(parsed.description || `Telegram API error: ${method}`));
+              return;
+            }
+            resolve(parsed.result);
+          } catch {
+            reject(new Error(`Invalid Telegram response (${response.statusCode})`));
+          }
+        });
+      });
+
+      request.on('timeout', () => request.destroy(new Error('Telegram request timed out')));
+      request.on('error', reject);
+      request.write(payload);
+      request.end();
     });
-    const data = await response.json();
-    if (!data.ok) throw new Error(data.description || `Telegram API error: ${method}`);
-    return data.result;
   }
 
   function keyboard() {
@@ -66,7 +101,6 @@ if (!token) {
 
   async function handleCallback(query) {
     const chatId = query.message.chat.id;
-    const messageId = query.message.message_id;
     const action = query.data;
 
     await telegram('answerCallbackQuery', { callback_query_id: query.id });
@@ -169,13 +203,28 @@ if (!token) {
   process.once('SIGTERM', () => { stopped = true; });
   process.once('SIGINT', () => { stopped = true; });
 
-  telegram('deleteWebhook', { drop_pending_updates: false })
-    .then(() => telegram('getMe'))
-    .then(bot => {
-      console.log(`[telegram] bot connected: @${bot.username}`);
-      poll();
-    })
-    .catch(error => console.error('[telegram] startup error:', error.message));
+  async function startBot() {
+    while (!stopped) {
+      try {
+        // Don't prevent the bot from starting just because deleting an old
+        // webhook temporarily fails.
+        try {
+          await telegram('deleteWebhook', { drop_pending_updates: false });
+        } catch (error) {
+          console.error('[telegram] deleteWebhook warning:', error.message);
+        }
 
+        const bot = await telegram('getMe');
+        console.log(`[telegram] bot connected: @${bot.username}`);
+        await poll();
+        return;
+      } catch (error) {
+        console.error('[telegram] startup/poll connection error:', error.message);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+    }
+  }
+
+  startBot();
   module.exports = { send };
 }
