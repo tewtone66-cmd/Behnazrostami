@@ -143,4 +143,8 @@ app.get('/api/admin/stats', admin, (_, res) => res.json({ users: users.size, cou
 
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
 app.use((req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
 app.listen(PORT, () => console.log(`Behnazrostami running on ${PORT}`));
+
+// Telegram sales bot. It stays disabled until BOT_TOKEN is added to the host environment.
+require('./bot');
