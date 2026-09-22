@@ -1,0 +1,13 @@
+name: Keep Behnazrostami Awake
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render health endpoint
+        run: curl --fail --silent --show-error --max-time 20 https://behnazrostami.onrender.com/health
